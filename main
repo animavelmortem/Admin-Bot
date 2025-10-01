@@ -152,21 +152,24 @@ async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         username = update.message.from_user.username if update.message.from_user.username else "Нет юзернейма"
         
-        status = get_order_status(client_id)
-        if not status:
-            create_order(client_id, username, "waiting_req")
+        current_status = get_order_status(client_id)
         
-        shop_bot = Bot(token=SHOP_BOT_TOKEN)
-        await shop_bot.send_message(
-            chat_id=client_id,
-            text=f"Реквизиты для оплаты:\n{requisites}\n\nПосле оплаты обязательно отправь квитанцию!"
-        )
-
-        updated = update_order(client_id, "waiting_payment")
+        if current_status:
+            updated = update_order(client_id, "waiting_payment")
+        else:
+            create_order(client_id, username, "waiting_payment")
+            updated = True
+        
         if updated:
+            shop_bot = Bot(token=SHOP_BOT_TOKEN)
+            await shop_bot.send_message(
+                chat_id=client_id,
+                text=f"Реквизиты для оплаты:\n{requisites}\n\nПосле оплаты обязательно отправь квитанцию!"
+            )
             await update.message.reply_text(f"Реквизиты отправлены клиенту {client_id}.")
         else:
-            await update.message.reply_text(f"Не удалось обновить статус для {client_id}.")
+            await update.message.reply_text(f"Не удалось обновить/создать статус для {client_id}.")
+            
     except Exception as e:
         await update.message.reply_text(f"Ошибка отправки реквизитов: {e}")
 
