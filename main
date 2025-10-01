@@ -5,7 +5,6 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import asyncio
 
 # ==========================
 # НАСТРОЙКИ
@@ -44,17 +43,26 @@ def create_order(client_id, status="waiting_req"):
 def update_order(client_id, new_status):
     sheet = get_sheet()
     records = sheet.get_all_records()
-    for i, row in enumerate(records, start=2):
-        if str(row["client_id"]) == str(client_id):
+
+    # Приводим client_id к строке
+    client_id_str = str(client_id)
+    
+    for i, row in enumerate(records, start=2):  # start=2 — потому что первая строка заголовки
+        # Замените "client_id" на точное название колонки в вашей таблице!
+        if str(row["client_id"]) == client_id_str:
+            # Обновляем статус
             sheet.update_cell(i, 2, new_status)
+            # Обновляем время в колонке 3
+            sheet.update_cell(i, 3, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             return True
     return False
 
 def get_order_status(client_id):
     sheet = get_sheet()
     records = sheet.get_all_records()
+    client_id_str = str(client_id)
     for row in records:
-        if str(row["client_id"]) == str(client_id):
+        if str(row["client_id"]) == client_id_str:
             return row["status"]
     return None
 
@@ -116,15 +124,13 @@ async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not status:
             create_order(client_id, "waiting_req")
         
-        # ==========================
-        # Отправка через SHOP_BOT
-        # ==========================
         shop_bot = Bot(token=SHOP_BOT_TOKEN)
         await shop_bot.send_message(
             chat_id=client_id,
             text=f"Реквизиты для оплаты:\n{requisites}\n\nПосле оплаты обязательно отправь квитанцию!"
         )
 
+        # Обновляем статус и время
         update_order(client_id, "waiting_payment")
         await update.message.reply_text(f"Реквизиты отправлены клиенту {client_id}.")
     except Exception as e:
