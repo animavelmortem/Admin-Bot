@@ -14,6 +14,8 @@ TOKEN = os.environ.get("TELEGRAM_ADMIN_BOT_TOKEN")
 SHOP_BOT_TOKEN = os.environ.get("TELEGRAM_SHOP_BOT_TOKEN")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
+TIMEZONE = pytz.timezone("Europe/Moscow")  # Московское время
+
 # ==========================
 # ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS
 # ==========================
@@ -35,77 +37,73 @@ def get_sheet():
     return sheet
 
 # ==========================
+# ВРЕМЯ В МСК
+# ==========================
+def now_msk():
+    return datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+# ==========================
 # ФУНКЦИИ РАБОТЫ С ЗАКАЗАМИ
 # ==========================
-def create_order(client_id, username, status="waiting_req"):
+def create_order(client_id, username="Нет юзернейма", status="waiting_req"):
     sheet = get_sheet()
+    client_id_str = str(client_id)
     
-    timezone = pytz.timezone('Europe/Moscow')
-    now = datetime.now(timezone)
+    existing_status = get_order_status(client_id)
+    if existing_status:
+        print(f"Заказ для {client_id} уже существует со статусом {existing_status}")
+        return False
     
-    sheet.append_row([str(client_id), username, status, now.strftime("%Y-%m-%d %H:%M:%S")])
+    sheet.append_row([client_id_str, username, status, now_msk()])
     print(f"Создан заказ для {client_id} со статусом {status}")
+    return True
 
-def update_order(client_id, new_status):
+def update_order(client_id, new_status=None, new_username=None):
     sheet = get_sheet()
     client_id_str = str(client_id)
     
     try:
         cell = sheet.find(client_id_str, in_column=1)
+        row_index = cell.row
         
-        if cell:
-            row_index = cell.row
-            
-            # Находим индексы столбцов по их названиям
-            headers = sheet.row_values(1)
-            try:
-                status_col_index = headers.index('status') + 1
-                created_at_col_index = headers.index('created_at') + 1
-            except ValueError:
-                print("Ошибка: не удалось найти столбцы 'status' или 'created_at' в заголовках.")
-                return False
-
-            timezone = pytz.timezone('Europe/Moscow')
-            now = datetime.now(timezone)
-            
-            # Обновляем ячейки, используя найденные индексы
-            sheet.update_cell(row_index, status_col_index, new_status)
-            sheet.update_cell(row_index, created_at_col_index, now.strftime("%Y-%m-%d %H:%M:%S"))
-            
-            print(f"Обновлено для {client_id}: статус {new_status}")
-            return True
-        else:
-            print(f"Не найден client_id {client_id} в таблице")
-            return False
-            
+        headers = sheet.row_values(1)
+        status_col = headers.index("status") + 1
+        username_col = headers.index("username") + 1
+        created_at_col = headers.index("created_at") + 1
+        
+        if new_status:
+            sheet.update_cell(row_index, status_col, new_status)
+        if new_username:
+            sheet.update_cell(row_index, username_col, new_username)
+        
+        sheet.update_cell(row_index, created_at_col, now_msk())
+        print(f"Обновлено для {client_id}: статус={new_status}, username={new_username}")
+        return True
     except gspread.exceptions.CellNotFound:
         print(f"Не найден client_id {client_id} в таблице")
         return False
     except Exception as e:
-        print(f"Произошла ошибка при обновлении: {e}")
+        print(f"Ошибка при обновлении заказа {client_id}: {e}")
         return False
 
 def get_order_status(client_id):
     sheet = get_sheet()
     records = sheet.get_all_records()
     client_id_str = str(client_id)
-
-    if not records:
-        return None
-
-    # Находим индекс столбца 'status' по его названию
-    headers = sheet.row_values(1)
-    try:
-        status_col_index = headers.index('status')
-        client_id_col_index = headers.index('client_id')
-    except ValueError:
-        print("Ошибка: не удалось найти столбцы 'status' или 'client_id' в заголовках.")
-        return None
-
-    # Теперь ищем статус по индексу, который мы нашли
+    
     for row in records:
-        if str(row[headers[client_id_col_index]]) == client_id_str:
-            return row[headers[status_col_index]]
+        if str(row.get("client_id")) == client_id_str:
+            return row.get("status")
+    return None
+
+def get_order_username(client_id):
+    sheet = get_sheet()
+    records = sheet.get_all_records()
+    client_id_str = str(client_id)
+    
+    for row in records:
+        if str(row.get("client_id")) == client_id_str:
+            return row.get("username")
     return None
 
 # ==========================
@@ -162,15 +160,13 @@ async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client_id = int(args[0])
         requisites = " ".join(args[1:])
         
-        username = update.message.from_user.username if update.message.from_user.username else "Нет юзернейма"
-        
+        username = get_order_username(client_id) or "Нет юзернейма"
         current_status = get_order_status(client_id)
         
         if current_status:
-            updated = update_order(client_id, "waiting_payment")
+            updated = update_order(client_id, new_status="waiting_payment", new_username=username)
         else:
-            create_order(client_id, username, "waiting_payment")
-            updated = True
+            updated = create_order(client_id, username=username, status="waiting_payment")
         
         if updated:
             shop_bot = Bot(token=SHOP_BOT_TOKEN)
@@ -255,7 +251,7 @@ async def handle_product_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("Отправь файл или фото товара!")
             return
         
-        updated = update_order(client_id, "done")
+        updated = update_order(client_id, new_status="done")
         if updated:
             await update.message.reply_text(f"Товар отправлен клиенту {client_id}.")
         else:
