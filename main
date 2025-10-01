@@ -34,7 +34,7 @@ def is_verified(chat_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
     if is_verified(chat_id):
-        await update.message.reply_text("Привет, админ! Используй команды:\n/send_req <client_id> <реквизиты>\n/confirm <client_id>\n/myid\n/reset")
+        await update.message.reply_text("Привет, админ! Используй команды:\n/send_req <client_id> <реквизиты>\n/confirm <client_id>\n/myid\n/reset\n/check_order <client_id>")
     else:
         await update.message.reply_text("Введи пароль для доступа к боту:")
 
@@ -81,10 +81,16 @@ async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c = conn.cursor()
         c.execute("SELECT status FROM orders WHERE client_id = ?", (client_id,))
         result = c.fetchone()
-        if not result or result[0] != 'waiting_req':
-            await update.message.reply_text("Нет такого заказа или он не ждёт реквизитов!")
+        if not result:
+            await update.message.reply_text("Нет такого заказа!")
             conn.close()
             return
+        
+        # Автоматический сброс статуса, если заказ "застрял"
+        if result[0] != 'waiting_req':
+            await update.message.reply_text("Статус заказа был неверный, сбросил на waiting_req.")
+            c.execute("UPDATE orders SET status = ? WHERE client_id = ?", ('waiting_req', client_id))
+            conn.commit()
         
         from telegram import Bot
         shop_bot = Bot(token=SHOP_BOT_TOKEN)
@@ -139,6 +145,33 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
     await update.message.reply_text("Верификация сброшена. Теперь введи пароль заново.")
+
+# Команда /check_order <client_id> — проверка статуса заказа
+async def check_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.from_user.id
+    if not is_verified(chat_id):
+        await update.message.reply_text("Сначала введи правильный пароль!")
+        return
+    
+    args = context.args
+    if len(args) < 1:
+        await update.message.reply_text("Использование: /check_order <client_id>")
+        return
+    
+    try:
+        client_id = int(args[0])
+        conn = sqlite3.connect('orders.db')
+        c = conn.cursor()
+        c.execute("SELECT status FROM orders WHERE client_id = ?", (client_id,))
+        result = c.fetchone()
+        if not result:
+            await update.message.reply_text(f"Заказ с client_id={client_id} не найден.")
+        else:
+            await update.message.reply_text(f"Статус заказа {client_id}: {result[0]}")
+        conn.close()
+    except Exception as e:
+        print(f"Ошибка проверки статуса: {e}")
+        await update.message.reply_text(f"Ошибка! Проверь client_id: {e}")
 
 # Обработчик файлов/фото от админа
 async def handle_product_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -203,6 +236,7 @@ def main():
     application.add_handler(CommandHandler("send_req", send_req))
     application.add_handler(CommandHandler("confirm", confirm))
     application.add_handler(CommandHandler("reset", reset))
+    application.add_handler(CommandHandler("check_order", check_order))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_password))
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_product_file))
     
