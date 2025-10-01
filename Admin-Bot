@@ -1,0 +1,209 @@
+import sqlite3
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+# Токены ботов
+TOKEN = '7780990328:AAHozWNig4dY56eK15W2pU0ekR6sxpwEMcM'  # Технический бот
+SHOP_BOT_TOKEN = '8294869186:AAFXW4_oPojtESNjFrXxy3HILafSj-DZsYA'  # Основной бот
+
+# Список admin_id (замени на свои chat_id)
+ADMIN_IDS = [123456789, 987654321]  # Замени на свои chat_id
+
+# Корректный пароль для админов
+ADMIN_PASSWORD = "10126522009"
+
+# Хранилище для отслеживания, какой админ подтверждает заказ
+pending_file = {}
+
+# Подключение к базе данных SQLite
+def init_db():
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS admins
+                 (chat_id INTEGER PRIMARY KEY, password_verified INTEGER)''')
+    conn.commit()
+    conn.close()
+
+# Проверка, верифицирован ли админ
+def is_verified(chat_id):
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute("SELECT password_verified FROM admins WHERE chat_id = ?", (chat_id,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] == 1 if result else False
+
+# Команда /start — запрос пароля
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.from_user.id
+    if chat_id not in ADMIN_IDS:
+        await update.message.reply_text("Ты не админ! Доступ запрещён.")
+        return
+    if is_verified(chat_id):
+        await update.message.reply_text("Привет, админ! Используй команды:\n/send_req <client_id> <реквизиты>\n/confirm <client_id>\n/myid")
+    else:
+        await update.message.reply_text("Введи пароль для доступа к боту:")
+
+# Обработка ввода пароля
+async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.from_user.id
+    if chat_id not in ADMIN_IDS:
+        await update.message.reply_text("Ты не админ! Доступ запрещён.")
+        return
+    if not is_verified(chat_id):
+        password = update.message.text.strip()
+        if password == ADMIN_PASSWORD:
+            conn = sqlite3.connect('orders.db')
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO admins (chat_id, password_verified) VALUES (?, 1)", (chat_id,))
+            conn.commit()
+            conn.close()
+            await update.message.reply_text("Пароль верный! Добро пожаловать, админ!")
+        else:
+            await update.message.reply_text("Неверный пароль! Попробуй ещё раз.")
+
+# Команда /myid
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.from_user.id
+    if chat_id not in ADMIN_IDS or not is_verified(chat_id):
+        await update.message.reply_text("Сначала введи правильный пароль!")
+        return
+    await update.message.reply_text(f"Твой chat_id: {chat_id}")
+
+# Команда /send_req <client_id> <реквизиты>
+async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.from_user.id
+    if chat_id not in ADMIN_IDS or not is_verified(chat_id):
+        await update.message.reply_text("Сначала введи правильный пароль!")
+        return
+    
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Использование: /send_req <client_id> <реквизиты>")
+        return
+    
+    try:
+        client_id = int(args[0])
+        requisites = ' '.join(args[1:])
+        
+        conn = sqlite3.connect('orders.db')
+        c = conn.cursor()
+        c.execute("SELECT status FROM orders WHERE client_id = ?", (client_id,))
+        result = c.fetchone()
+        if not result or result[0] != 'waiting_req':
+            await update.message.reply_text("Нет такого заказа или он не ждёт реквизитов!")
+            conn.close()
+            return
+        
+        from telegram import Bot
+        shop_bot = Bot(token=SHOP_BOT_TOKEN)
+        await shop_bot.send_message(
+            chat_id=client_id,
+            text=f"Реквизиты для оплаты:\n{requisites}\n\nПосле оплаты обязательно отправь квитанцию!"
+        )
+        c.execute("UPDATE orders SET status = ? WHERE client_id = ?", ('waiting_payment', client_id))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(f"Реквизиты отправлены клиенту {client_id}.")
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка! Проверь client_id: {e}")
+
+# Команда /confirm <client_id>
+async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.from_user.id
+    if chat_id not in ADMIN_IDS or not is_verified(chat_id):
+        await update.message.reply_text("Сначала введи правильный пароль!")
+        return
+    
+    args = context.args
+    if len(args) < 1:
+        await update.message.reply_text("Использование: /confirm <client_id>")
+        return
+    
+    try:
+        client_id = int(args[0])
+        conn = sqlite3.connect('orders.db')
+        c = conn.cursor()
+        c.execute("SELECT status FROM orders WHERE client_id = ?", (client_id,))
+        result = c.fetchone()
+        if not result or result[0] != 'waiting_confirm':
+            await update.message.reply_text("Нет заказа на подтверждение!")
+            conn.close()
+            return
+        
+        pending_file[chat_id] = client_id
+        await update.message.reply_text("Теперь отправь файл или фото товара для клиента.")
+        conn.close()
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка! Проверь client_id: {e}")
+
+# Обработчик файлов/фото от админа
+async def handle_product_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.from_user.id
+    if chat_id not in ADMIN_IDS or not is_verified(chat_id):
+        await update.message.reply_text("Сначала введи правильный пароль!")
+        return
+    
+    if chat_id not in pending_file:
+        await update.message.reply_text("Сначала выполни /confirm <client_id> для отправки товара!")
+        return
+    
+    client_id = pending_file[chat_id]
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute("SELECT status FROM orders WHERE client_id = ?", (client_id,))
+    result = c.fetchone()
+    if not result or result[0] != 'waiting_confirm':
+        await update.message.reply_text("Заказ не в статусе ожидания подтверждения!")
+        conn.close()
+        del pending_file[chat_id]
+        return
+    
+    try:
+        from telegram import Bot
+        shop_bot = Bot(token=SHOP_BOT_TOKEN)
+        if update.message.photo:
+            photo = update.message.photo[-1].file_id
+            await shop_bot.send_photo(
+                chat_id=client_id,
+                photo=photo,
+                caption="Покупку подтверждено! Вот ваш товар. Спасибо!"
+            )
+        elif update.message.document:
+            document = update.message.document.file_id
+            await shop_bot.send_document(
+                chat_id=client_id,
+                document=document,
+                caption="Покупку подтверждено! Вот ваш товар. Спасибо!"
+            )
+        else:
+            await update.message.reply_text("Отправь файл или фото товара!")
+            conn.close()
+            return
+        
+        c.execute("DELETE FROM orders WHERE client_id = ?", (client_id,))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(f"Товар отправлен клиенту {client_id}.")
+        del pending_file[chat_id]
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка отправки товара: {e}")
+        conn.close()
+
+def main():
+    init_db()  # Инициализируем базу данных
+    application = Application.builder().token(TOKEN).build()
+    
+    # Обработчики
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("myid", myid))
+    application.add_handler(CommandHandler("send_req", send_req))
+    application.add_handler(CommandHandler("confirm", confirm))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_password))
+    application.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_product_file))
+    
+    print("Технический бот запущен...")
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
