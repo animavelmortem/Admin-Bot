@@ -39,31 +39,49 @@ def get_sheet():
 def create_order(client_id, status="waiting_req"):
     sheet = get_sheet()
     sheet.append_row([str(client_id), status, datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+    print(f"Создан заказ для {client_id} со статусом {status}")
 
 def update_order(client_id, new_status):
     sheet = get_sheet()
     records = sheet.get_all_records()
+    
+    if not records:
+        print("Таблица пустая!")
+        return False
 
     # Приводим client_id к строке
     client_id_str = str(client_id)
-    
-    for i, row in enumerate(records, start=2):  # start=2 — потому что первая строка заголовки
-        # Замените "client_id" на точное название колонки в вашей таблице!
-        if str(row["client_id"]) == client_id_str:
-            # Обновляем статус
-            sheet.update_cell(i, 2, new_status)
-            # Обновляем время в колонке 3
-            sheet.update_cell(i, 3, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    # Определяем реальные имена колонок в таблице
+    headers = list(records[0].keys())
+    col_client_id = headers[0]  # Первая колонка
+    col_status = headers[1]     # Вторая колонка
+    col_time = headers[2]       # Третья колонка
+
+    for i, row in enumerate(records, start=2):  # start=2 — первая строка заголовки
+        if str(row[col_client_id]) == client_id_str:
+            sheet.update_cell(i, 2, new_status)  # колонка 2 — статус
+            sheet.update_cell(i, 3, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))  # колонка 3 — время
+            print(f"Обновлено для {client_id}: статус {new_status}")
             return True
+    print(f"Не найден client_id {client_id} в таблице")
     return False
 
 def get_order_status(client_id):
     sheet = get_sheet()
     records = sheet.get_all_records()
     client_id_str = str(client_id)
+
+    if not records:
+        return None
+
+    headers = list(records[0].keys())
+    col_client_id = headers[0]
+    col_status = headers[1]
+
     for row in records:
-        if str(row["client_id"]) == client_id_str:
-            return row["status"]
+        if str(row[col_client_id]) == client_id_str:
+            return row[col_status]
     return None
 
 # ==========================
@@ -131,8 +149,11 @@ async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Обновляем статус и время
-        update_order(client_id, "waiting_payment")
-        await update.message.reply_text(f"Реквизиты отправлены клиенту {client_id}.")
+        updated = update_order(client_id, "waiting_payment")
+        if updated:
+            await update.message.reply_text(f"Реквизиты отправлены клиенту {client_id}.")
+        else:
+            await update.message.reply_text(f"Не удалось обновить статус для {client_id}.")
     except Exception as e:
         await update.message.reply_text(f"Ошибка отправки реквизитов: {e}")
 
@@ -206,8 +227,11 @@ async def handle_product_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("Отправь файл или фото товара!")
             return
         
-        update_order(client_id, "done")
-        await update.message.reply_text(f"Товар отправлен клиенту {client_id}.")
+        updated = update_order(client_id, "done")
+        if updated:
+            await update.message.reply_text(f"Товар отправлен клиенту {client_id}.")
+        else:
+            await update.message.reply_text(f"Не удалось обновить статус для {client_id}.")
         del pending_file[chat_id]
     except Exception as e:
         await update.message.reply_text(f"Ошибка отправки товара: {e}")
