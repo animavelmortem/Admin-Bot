@@ -1,3 +1,5 @@
+import os
+import json
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
@@ -7,17 +9,34 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ==========================
 # НАСТРОЙКИ
 # ==========================
-TOKEN = "7780990328:AAHozWNig4dY56eK15W2pU0ekR6sxpwEMcM"   # технический бот
-SHOP_BOT_TOKEN = "8294869186:AAFXW4_oPojtESNjFrXxy3HILafSj-DZsYA"  # основной бот
-ADMIN_PASSWORD = "10126522009"
+# Важно: Никогда не храните токены и пароли прямо в коде! 
+# Используйте переменные окружения для безопасности.
+
+# Получаем токены и пароль из переменных окружения
+TOKEN = os.environ.get("TELEGRAM_ADMIN_BOT_TOKEN")
+SHOP_BOT_TOKEN = os.environ.get("TELEGRAM_SHOP_BOT_TOKEN")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+
+if not TOKEN or not SHOP_BOT_TOKEN or not ADMIN_PASSWORD:
+    raise ValueError("Один или несколько обязательных секретов (токены, пароль) не установлены в переменных окружения.")
 
 # ==========================
 # ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS
 # ==========================
 def get_sheet():
+    # Получаем содержимое credentials из переменной окружения
+    creds_json_str = os.environ.get("GCP_SERVICE_ACCOUNT_CREDENTIALS")
+    if not creds_json_str:
+        raise ValueError("GCP_SERVICE_ACCOUNT_CREDENTIALS environment variable not set.")
+    
+    try:
+        creds_json = json.loads(creds_json_str)
+    except json.JSONDecodeError:
+        raise ValueError("Ошибка декодирования JSON из переменной окружения. Проверьте формат.")
+
     scopes = ["https://www.googleapis.com/auth/spreadsheets",
               "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+    creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
     client = gspread.authorize(creds)
     sheet = client.open("Orders").sheet1
     return sheet
@@ -32,9 +51,9 @@ def create_order(client_id, status="waiting_req"):
 def update_order(client_id, new_status):
     sheet = get_sheet()
     records = sheet.get_all_records()
-    for i, row in enumerate(records, start=2):  # строка 2 и дальше (1 = заголовки)
+    for i, row in enumerate(records, start=2):
         if str(row["client_id"]) == str(client_id):
-            sheet.update_cell(i, 2, new_status)  # колонка 2 = status
+            sheet.update_cell(i, 2, new_status)
             return True
     return False
 
