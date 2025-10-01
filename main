@@ -1,71 +1,83 @@
-import sqlite3
-from telegram import Update
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Токены ботов
-TOKEN = '7780990328:AAHozWNig4dY56eK15W2pU0ekR6sxpwEMcM'  # Технический бот
-SHOP_BOT_TOKEN = '8294869186:AAFXW4_oPojtESNjFrXxy3HILafSj-DZsYA'  # Основной бот
-
-# Корректный пароль
+# ==========================
+# НАСТРОЙКИ
+# ==========================
+TOKEN = "7780990328:AAHozWNig4dY56eK15W2pU0ekR6sxpwEMcM"   # технический бот
+SHOP_BOT_TOKEN = "8294869186:AAFXW4_oPojtESNjFrXxy3HILafSj-DZsYA"  # основной бот
 ADMIN_PASSWORD = "10126522009"
 
-# Хранилище для отслеживания, какой админ подтверждает заказ
+# ==========================
+# ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS
+# ==========================
+def get_sheet():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    client = gspread.authorize(creds)
+    sheet = client.open("Orders").sheet1   # твоя таблица Orders
+    return sheet
+
+# ==========================
+# ФУНКЦИИ РАБОТЫ С ЗАКАЗАМИ
+# ==========================
+def create_order(client_id, status="waiting_req"):
+    sheet = get_sheet()
+    sheet.append_row([str(client_id), status, datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+
+def update_order(client_id, new_status):
+    sheet = get_sheet()
+    records = sheet.get_all_records()
+    for i, row in enumerate(records, start=2):  # строка 2 и дальше (1 = заголовки)
+        if str(row["client_id"]) == str(client_id):
+            sheet.update_cell(i, 2, new_status)  # колонка 2 = status
+            return True
+    return False
+
+def get_order_status(client_id):
+    sheet = get_sheet()
+    records = sheet.get_all_records()
+    for row in records:
+        if str(row["client_id"]) == str(client_id):
+            return row["status"]
+    return None
+
+# ==========================
+# ХРАНИЛИЩЕ ДЛЯ АДМИНОВ
+# ==========================
+verified_admins = set()
 pending_file = {}
 
-# Подключение к базе данных SQLite
-def init_db():
-    conn = sqlite3.connect('orders.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS admins
-                 (chat_id INTEGER PRIMARY KEY, password_verified INTEGER)''')
-    conn.commit()
-    conn.close()
-
-# Проверка, верифицирован ли админ
-def is_verified(chat_id):
-    conn = sqlite3.connect('orders.db')
-    c = conn.cursor()
-    c.execute("SELECT password_verified FROM admins WHERE chat_id = ?", (chat_id,))
-    result = c.fetchone()
-    conn.close()
-    return result[0] == 1 if result else False
-
-# Команда /start — запрос пароля
+# ==========================
+# ОБРАБОТЧИКИ КОМАНД
+# ==========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
-    if is_verified(chat_id):
-        await update.message.reply_text("Привет, админ! Используй команды:\n/send_req <client_id> <реквизиты>\n/confirm <client_id>\n/myid\n/reset\n/check_order <client_id>")
+    if chat_id in verified_admins:
+        await update.message.reply_text("Привет, админ! Команды:\n/send_req <client_id> <реквизиты>\n/confirm <client_id>\n/myid\n/reset\n/check_order <client_id>")
     else:
         await update.message.reply_text("Введи пароль для доступа к боту:")
 
-# Обработка ввода пароля
 async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
-    if not is_verified(chat_id):
+    if chat_id not in verified_admins:
         password = update.message.text.strip()
         if password == ADMIN_PASSWORD:
-            conn = sqlite3.connect('orders.db')
-            c = conn.cursor()
-            c.execute("INSERT OR REPLACE INTO admins (chat_id, password_verified) VALUES (?, 1)", (chat_id,))
-            conn.commit()
-            conn.close()
+            verified_admins.add(chat_id)
             await update.message.reply_text("Пароль верный! Добро пожаловать, админ!")
         else:
             await update.message.reply_text("Неверный пароль! Попробуй ещё раз.")
 
-# Команда /myid
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.from_user.id
-    if not is_verified(chat_id):
-        await update.message.reply_text("Сначала введи правильный пароль!")
-        return
-    await update.message.reply_text(f"Твой chat_id: {chat_id}")
+    await update.message.reply_text(f"Твой chat_id: {update.message.from_user.id}")
 
-# Команда /send_req <client_id> <реквизиты>
 async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
-    if not is_verified(chat_id):
-        await update.message.reply_text("Сначала введи правильный пароль!")
+    if chat_id not in verified_admins:
+        await update.message.reply_text("Сначала введи пароль!")
         return
     
     args = context.args
@@ -75,162 +87,101 @@ async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         client_id = int(args[0])
-        requisites = ' '.join(args[1:])
+        requisites = " ".join(args[1:])
         
-        conn = sqlite3.connect('orders.db')
-        c = conn.cursor()
-        c.execute("SELECT status FROM orders WHERE client_id = ?", (client_id,))
-        result = c.fetchone()
-        if not result:
-            await update.message.reply_text("Нет такого заказа!")
-            conn.close()
-            return
+        status = get_order_status(client_id)
+        if not status:
+            create_order(client_id, "waiting_req")
         
-        # Автоматический сброс статуса, если заказ "застрял"
-        if result[0] != 'waiting_req':
-            await update.message.reply_text("Статус заказа был неверный, сбросил на waiting_req.")
-            c.execute("UPDATE orders SET status = ? WHERE client_id = ?", ('waiting_req', client_id))
-            conn.commit()
-        
-        from telegram import Bot
         shop_bot = Bot(token=SHOP_BOT_TOKEN)
         await shop_bot.send_message(
             chat_id=client_id,
             text=f"Реквизиты для оплаты:\n{requisites}\n\nПосле оплаты обязательно отправь квитанцию!"
         )
-        c.execute("UPDATE orders SET status = ? WHERE client_id = ?", ('waiting_payment', client_id))
-        conn.commit()
-        conn.close()
+        update_order(client_id, "waiting_payment")
         await update.message.reply_text(f"Реквизиты отправлены клиенту {client_id}.")
     except Exception as e:
-        print(f"Ошибка отправки реквизитов: {e}")
-        await update.message.reply_text(f"Ошибка отправки реквизитов клиенту: {e}")
+        await update.message.reply_text(f"Ошибка отправки реквизитов: {e}")
 
-# Команда /confirm <client_id>
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
-    if not is_verified(chat_id):
-        await update.message.reply_text("Сначала введи правильный пароль!")
+    if chat_id not in verified_admins:
+        await update.message.reply_text("Сначала введи пароль!")
         return
     
     args = context.args
-    if len(args) < 1:
+    if not args:
         await update.message.reply_text("Использование: /confirm <client_id>")
         return
     
-    try:
-        client_id = int(args[0])
-        conn = sqlite3.connect('orders.db')
-        c = conn.cursor()
-        c.execute("SELECT status FROM orders WHERE client_id = ?", (client_id,))
-        result = c.fetchone()
-        if not result or result[0] != 'waiting_confirm':
-            await update.message.reply_text("Нет заказа на подтверждение!")
-            conn.close()
-            return
-        
-        pending_file[chat_id] = client_id
-        await update.message.reply_text("Теперь отправь файл или фото товара для клиента.")
-        conn.close()
-    except Exception as e:
-        print(f"Ошибка подтверждения: {e}")
-        await update.message.reply_text(f"Ошибка! Проверь client_id: {e}")
+    client_id = int(args[0])
+    status = get_order_status(client_id)
+    if status != "waiting_confirm":
+        await update.message.reply_text("Нет заказа в статусе ожидания подтверждения!")
+        return
+    
+    pending_file[chat_id] = client_id
+    await update.message.reply_text("Теперь отправь файл или фото товара для клиента.")
 
-# Команда /reset — сброс верификации
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
-    conn = sqlite3.connect('orders.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM admins WHERE chat_id = ?", (chat_id,))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text("Верификация сброшена. Теперь введи пароль заново.")
+    if chat_id in verified_admins:
+        verified_admins.remove(chat_id)
+    await update.message.reply_text("Верификация сброшена. Введи пароль заново.")
 
-# Команда /check_order <client_id> — проверка статуса заказа
 async def check_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
-    if not is_verified(chat_id):
-        await update.message.reply_text("Сначала введи правильный пароль!")
+    if chat_id not in verified_admins:
+        await update.message.reply_text("Сначала введи пароль!")
         return
     
     args = context.args
-    if len(args) < 1:
+    if not args:
         await update.message.reply_text("Использование: /check_order <client_id>")
         return
     
-    try:
-        client_id = int(args[0])
-        conn = sqlite3.connect('orders.db')
-        c = conn.cursor()
-        c.execute("SELECT status FROM orders WHERE client_id = ?", (client_id,))
-        result = c.fetchone()
-        if not result:
-            await update.message.reply_text(f"Заказ с client_id={client_id} не найден.")
-        else:
-            await update.message.reply_text(f"Статус заказа {client_id}: {result[0]}")
-        conn.close()
-    except Exception as e:
-        print(f"Ошибка проверки статуса: {e}")
-        await update.message.reply_text(f"Ошибка! Проверь client_id: {e}")
+    client_id = int(args[0])
+    status = get_order_status(client_id)
+    if status:
+        await update.message.reply_text(f"Статус заказа {client_id}: {status}")
+    else:
+        await update.message.reply_text("Заказ не найден.")
 
-# Обработчик файлов/фото от админа
 async def handle_product_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
-    if not is_verified(chat_id):
-        await update.message.reply_text("Сначала введи правильный пароль!")
+    if chat_id not in verified_admins:
+        await update.message.reply_text("Сначала введи пароль!")
         return
     
     if chat_id not in pending_file:
-        await update.message.reply_text("Сначала выполни /confirm <client_id> для отправки товара!")
+        await update.message.reply_text("Сначала выполни /confirm <client_id>.")
         return
     
     client_id = pending_file[chat_id]
-    conn = sqlite3.connect('orders.db')
-    c = conn.cursor()
-    c.execute("SELECT status FROM orders WHERE client_id = ?", (client_id,))
-    result = c.fetchone()
-    if not result or result[0] != 'waiting_confirm':
-        await update.message.reply_text("Заказ не в статусе ожидания подтверждения!")
-        conn.close()
-        del pending_file[chat_id]
-        return
-    
     try:
-        from telegram import Bot
         shop_bot = Bot(token=SHOP_BOT_TOKEN)
         if update.message.photo:
             photo = update.message.photo[-1].file_id
-            await shop_bot.send_photo(
-                chat_id=client_id,
-                photo=photo,
-                caption="Покупку подтверждено! Вот ваш товар. Спасибо!"
-            )
+            await shop_bot.send_photo(chat_id=client_id, photo=photo, caption="Покупку подтверждено! Вот ваш товар. Спасибо!")
         elif update.message.document:
             document = update.message.document.file_id
-            await shop_bot.send_document(
-                chat_id=client_id,
-                document=document,
-                caption="Покупку подтверждено! Вот ваш товар. Спасибо!"
-            )
+            await shop_bot.send_document(chat_id=client_id, document=document, caption="Покупку подтверждено! Вот ваш товар. Спасибо!")
         else:
             await update.message.reply_text("Отправь файл или фото товара!")
-            conn.close()
             return
         
-        c.execute("DELETE FROM orders WHERE client_id = ?", (client_id,))
-        conn.commit()
-        conn.close()
+        update_order(client_id, "done")
         await update.message.reply_text(f"Товар отправлен клиенту {client_id}.")
         del pending_file[chat_id]
     except Exception as e:
-        print(f"Ошибка отправки товара: {e}")
         await update.message.reply_text(f"Ошибка отправки товара: {e}")
 
+# ==========================
+# ЗАПУСК БОТА
+# ==========================
 def main():
-    init_db()  # Инициализируем базу данных
     application = Application.builder().token(TOKEN).build()
     
-    # Обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("myid", myid))
     application.add_handler(CommandHandler("send_req", send_req))
@@ -243,5 +194,5 @@ def main():
     print("Технический бот запущен...")
     application.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
