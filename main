@@ -40,11 +40,9 @@ def get_sheet():
 def create_order(client_id, username, status="waiting_req"):
     sheet = get_sheet()
     
-    # Указываем часовой пояс
     timezone = pytz.timezone('Europe/Moscow')
     now = datetime.now(timezone)
     
-    # Добавляем username в новую строку
     sheet.append_row([str(client_id), username, status, now.strftime("%Y-%m-%d %H:%M:%S")])
     print(f"Создан заказ для {client_id} со статусом {status}")
 
@@ -58,13 +56,21 @@ def update_order(client_id, new_status):
         if cell:
             row_index = cell.row
             
-            # Указываем часовой пояс
+            # Находим индексы столбцов по их названиям
+            headers = sheet.row_values(1)
+            try:
+                status_col_index = headers.index('status') + 1
+                created_at_col_index = headers.index('created_at') + 1
+            except ValueError:
+                print("Ошибка: не удалось найти столбцы 'status' или 'created_at' в заголовках.")
+                return False
+
             timezone = pytz.timezone('Europe/Moscow')
             now = datetime.now(timezone)
             
-            # Обновляем статус в 3-й колонке и время в 4-й
-            sheet.update_cell(row_index, 3, new_status)
-            sheet.update_cell(row_index, 4, now.strftime("%Y-%m-%d %H:%M:%S"))
+            # Обновляем ячейки, используя найденные индексы
+            sheet.update_cell(row_index, status_col_index, new_status)
+            sheet.update_cell(row_index, created_at_col_index, now.strftime("%Y-%m-%d %H:%M:%S"))
             
             print(f"Обновлено для {client_id}: статус {new_status}")
             return True
@@ -87,13 +93,19 @@ def get_order_status(client_id):
     if not records:
         return None
 
-    headers = list(records[0].keys())
-    col_client_id = headers[0]
-    col_status = headers[2]
+    # Находим индекс столбца 'status' по его названию
+    headers = sheet.row_values(1)
+    try:
+        status_col_index = headers.index('status')
+        client_id_col_index = headers.index('client_id')
+    except ValueError:
+        print("Ошибка: не удалось найти столбцы 'status' или 'client_id' в заголовках.")
+        return None
 
+    # Теперь ищем статус по индексу, который мы нашли
     for row in records:
-        if str(row[col_client_id]) == client_id_str:
-            return row[col_status]
+        if str(row[headers[client_id_col_index]]) == client_id_str:
+            return row[headers[status_col_index]]
     return None
 
 # ==========================
