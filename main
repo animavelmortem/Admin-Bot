@@ -40,7 +40,7 @@ def get_sheet():
 def create_order(client_id, username, status="waiting_req"):
     sheet = get_sheet()
     
-    # Указываем часовой пояс для Москвы
+    # Указываем часовой пояс
     timezone = pytz.timezone('Europe/Moscow')
     now = datetime.now(timezone)
     
@@ -58,7 +58,7 @@ def update_order(client_id, new_status):
         if cell:
             row_index = cell.row
             
-            # Указываем часовой пояс для Москвы
+            # Указываем часовой пояс
             timezone = pytz.timezone('Europe/Moscow')
             now = datetime.now(timezone)
             
@@ -89,7 +89,7 @@ def get_order_status(client_id):
 
     headers = list(records[0].keys())
     col_client_id = headers[0]
-    col_status = headers[2] # Теперь статус в 3-й колонке
+    col_status = headers[2]
 
     for row in records:
         if str(row[col_client_id]) == client_id_str:
