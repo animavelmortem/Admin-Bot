@@ -1,5 +1,5 @@
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -15,10 +15,11 @@ ADMIN_PASSWORD = "10126522009"
 # ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS
 # ==========================
 def get_sheet():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    scopes = ["https://www.googleapis.com/auth/spreadsheets",
+              "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
     client = gspread.authorize(creds)
-    sheet = client.open("Orders").sheet1   # твоя таблица Orders
+    sheet = client.open("Orders").sheet1
     return sheet
 
 # ==========================
@@ -57,7 +58,14 @@ pending_file = {}
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
     if chat_id in verified_admins:
-        await update.message.reply_text("Привет, админ! Команды:\n/send_req <client_id> <реквизиты>\n/confirm <client_id>\n/myid\n/reset\n/check_order <client_id>")
+        await update.message.reply_text(
+            "Привет, админ! Команды:\n"
+            "/send_req <client_id> <реквизиты>\n"
+            "/confirm <client_id>\n"
+            "/myid\n"
+            "/reset\n"
+            "/check_order <client_id>"
+        )
     else:
         await update.message.reply_text("Введи пароль для доступа к боту:")
 
