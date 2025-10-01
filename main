@@ -9,22 +9,15 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ==========================
 # НАСТРОЙКИ
 # ==========================
-# Важно: Никогда не храните токены и пароли прямо в коде! 
-# Используйте переменные окружения для безопасности.
-
 # Получаем токены и пароль из переменных окружения
 TOKEN = os.environ.get("TELEGRAM_ADMIN_BOT_TOKEN")
 SHOP_BOT_TOKEN = os.environ.get("TELEGRAM_SHOP_BOT_TOKEN")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
-if not TOKEN or not SHOP_BOT_TOKEN or not ADMIN_PASSWORD:
-    raise ValueError("Один или несколько обязательных секретов (токены, пароль) не установлены в переменных окружения.")
-
 # ==========================
 # ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS
 # ==========================
 def get_sheet():
-    # Получаем содержимое credentials из переменной окружения
     creds_json_str = os.environ.get("GCP_SERVICE_ACCOUNT_CREDENTIALS")
     if not creds_json_str:
         raise ValueError("GCP_SERVICE_ACCOUNT_CREDENTIALS environment variable not set.")
