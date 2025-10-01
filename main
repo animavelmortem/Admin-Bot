@@ -5,11 +5,11 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import asyncio
 
 # ==========================
 # НАСТРОЙКИ
 # ==========================
-# Получаем токены и пароль из переменных окружения
 TOKEN = os.environ.get("TELEGRAM_ADMIN_BOT_TOKEN")
 SHOP_BOT_TOKEN = os.environ.get("TELEGRAM_SHOP_BOT_TOKEN")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
@@ -94,6 +94,9 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Твой chat_id: {update.message.from_user.id}")
 
+# ==========================
+# ОТПРАВКА РЕКВИЗИТОВ КЛИЕНТУ
+# ==========================
 async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
     if chat_id not in verified_admins:
@@ -113,16 +116,23 @@ async def send_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not status:
             create_order(client_id, "waiting_req")
         
+        # ==========================
+        # Отправка через SHOP_BOT
+        # ==========================
         shop_bot = Bot(token=SHOP_BOT_TOKEN)
         await shop_bot.send_message(
             chat_id=client_id,
             text=f"Реквизиты для оплаты:\n{requisites}\n\nПосле оплаты обязательно отправь квитанцию!"
         )
+
         update_order(client_id, "waiting_payment")
         await update.message.reply_text(f"Реквизиты отправлены клиенту {client_id}.")
     except Exception as e:
         await update.message.reply_text(f"Ошибка отправки реквизитов: {e}")
 
+# ==========================
+# ПОДТВЕРЖДЕНИЕ ОТПРАВКИ ТОВАРА
+# ==========================
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
     if chat_id not in verified_admins:
